@@ -41,6 +41,15 @@ describe('LNG blend feasibility regression',()=>{
   expect(result.details.maximumAllowedBlend).toBe(1);
   expect(result.reason).toBe('Feasible');
  });
+ it('does not add the reference methane slip twice to the displayed WtW CI',()=>{
+  const defaultSlip=settings.lngSlip['LNG Otto LP'];
+  expect(defaultSlip).toBe(lng.slip);
+  expect(effectiveCI(lng,2030,settings,defaultSlip)).toBe(75);
+  const result=minimumBlend(bunker,lng,2030,settings,405000,defaultSlip);
+  expect(result.feasible).toBe(true);
+  expect(result.energyShare).toBeCloseTo(0.338465,5);
+  expect(result.actualCI).toBeCloseTo(85.6904,6);
+ });
  it.each([[2030,true],[2035,true],[2040,false],[2050,false]] as const)('%s feasibility is %s',(year,feasible)=>{
   const result=minimumBlend(bunker,lng,year,settings,405000);
   expect(result.feasible).toBe(feasible);
@@ -122,9 +131,9 @@ describe('scenario price schema migration',()=>{
 describe('decision-engine regulatory integrations',()=>{
  it('raises LNG FuelEU CI and required blend with methane slip',()=>{
   const lng=fuels.find(f=>f.id==='lng')!;
-  const lowCI=effectiveCI(lng,2030,settings,0),highCI=effectiveCI(lng,2030,settings,.02);
+  const lowCI=effectiveCI(lng,2030,settings,lng.slip),highCI=effectiveCI(lng,2030,settings,lng.slip+.02);
   expect(highCI).toBeGreaterThan(lowCI);
-  const low=minimumBlend(fuels[0],lng,2030,settings,405000,0),high=minimumBlend(fuels[0],lng,2030,settings,405000,.02);
+  const low=minimumBlend(fuels[0],lng,2030,settings,405000,lng.slip),high=minimumBlend(fuels[0],lng,2030,settings,405000,lng.slip+.02);
   expect(!high.feasible||high.energyShare>low.energyShare).toBe(true);
  });
  it('applies vessel ETS scope exactly',()=>{
