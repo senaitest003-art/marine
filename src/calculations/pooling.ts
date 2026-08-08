@@ -1,4 +1,24 @@
-import {Fuel,Settings,Vessel,Year} from '../types';import {minimumBlend} from './blending';import {complianceBalance,effectiveCI,targetCI} from './fuelEU';
-export const minimumDedicated=(fleet:Vessel[],base:Fuel,alt:Fuel,year:Year,s:Settings)=>{let deficit=0,surplus=0;for(const v of fleet){const e=v.energyGJ*1000*v.fuelEUScope;deficit+=Math.min(0,complianceBalance(e,effectiveCI(base,year,s),targetCI(year,s)));surplus+=Math.max(0,complianceBalance(e,effectiveCI(alt,year,s),targetCI(year,s)));}const n=surplus<=0?Infinity:Math.ceil((-deficit/fleet.length)/(surplus/fleet.length-deficit/fleet.length));return Math.min(n,fleet.length+1)};
+import {Fuel,Settings,Vessel,Year} from '../types';
+import {minimumBlend} from './blending';
+import {blendCI,complianceBalance,effectiveCI,targetCI} from './fuelEU';
+
+export interface DedicatedSelection{count:number;vesselIds:string[];balance:number;feasible:boolean}
+export const dedicatedSelection=(fleet:Vessel[],base:Fuel,alt:Fuel,year:Year,s:Settings):DedicatedSelection=>{
+ const target=targetCI(year,s);
+ let balance=s.bankedSurplus+s.borrowedBalance;
+ const candidates=fleet.map(v=>{
+  const energyMJ=v.energyGJ*1000*v.fuelEUScope;
+  const fossil=complianceBalance(energyMJ,effectiveCI(base,year,s),target);
+  const slip=(alt.id==='lng'||alt.id==='bioLng')?s.lngSlip[v.engine]:0;
+  const cleanCI=blendCI(base,alt,1,year,s,slip);
+  const clean=complianceBalance(energyMJ,cleanCI,target);
+  balance+=fossil;
+  return{v,improvement:clean-fossil};
+ }).filter(x=>x.v.ready&&x.v.compatible.includes(alt.id)&&x.v.maxBlend>=1&&x.improvement>0).sort((a,b)=>b.improvement-a.improvement||a.v.id.localeCompare(b.v.id));
+ const ids:string[]=[];
+ for(const candidate of candidates){if(balance>=0)break;balance+=candidate.improvement;ids.push(candidate.v.id)}
+ return{count:balance>=0?ids.length:Infinity,vesselIds:ids,balance,feasible:balance>=0};
+};
+export const minimumDedicated=(fleet:Vessel[],base:Fuel,alt:Fuel,year:Year,s:Settings)=>dedicatedSelection(fleet,base,alt,year,s).count;
 export const poolBalance=(balances:number[])=>({balance:balances.reduce((a,b)=>a+b,0),surplus:balances.filter(x=>x>0).reduce((a,b)=>a+b,0),deficit:-balances.filter(x=>x<0).reduce((a,b)=>a+b,0)});
-export const uniformShare=(fleet:Vessel[],b:Fuel,a:Fuel,y:Year,s:Settings)=>minimumBlend(b,a,y,s,fleet.reduce((x,v)=>x+v.energyGJ,0)).energyShare;
+export const uniformShare=(fleet:Vessel[],b:Fuel,a:Fuel,y:Year,s:Settings)=>minimumBlend(b,a,y,s,fleet.reduce((x,v)=>x+v.energyGJ*v.fuelEUScope,0),a.id==='lng'||a.id==='bioLng'?fleet.reduce((x,v)=>x+s.lngSlip[v.engine]*v.energyGJ,0)/fleet.reduce((x,v)=>x+v.energyGJ,0):0).energyShare;
