@@ -7,6 +7,7 @@ import {complianceBalance,penalty,targetCI} from './fuelEU';
 import {eurPerGJFromEurPerT,normalizePrice} from './fuelPricing';
 import {optimize} from './optimization';
 import {minimumDedicated,poolBalance} from './pooling';
+import {rankCompliantFuels} from './recommendation';
 import {energyToMass} from './units';
 
 describe('FuelEU',()=>{
@@ -60,5 +61,36 @@ describe('canonical EUR/GJ fuel economics',()=>{
   const vlsfo={...fuels[0],price:{...fuels[0].price,eurGJ:{...fuels[0].price.eurGJ,2030:18}}};
   const lng={...fuels[1],price:{...fuels[1].price,eurGJ:{...fuels[1].price.eurGJ,2030:14}}};
   expect(fuelCost([{fuel:vlsfo,energyGJ:500},{fuel:lng,energyGJ:500}],2030)).toBe(16000);
+ });
+});
+
+describe('long-term planning price trajectories',()=>{
+ it('reduces e-Methanol prices through every model period',()=>{
+  const p=fuels.find(f=>f.id==='eMethanol')!.price.usdT;
+  expect(p[2030]).toBeGreaterThan(p[2035]);expect(p[2035]).toBeGreaterThan(p[2040]);expect(p[2040]).toBeGreaterThan(p[2050]);
+ });
+ it('reduces green ammonia prices through every model period',()=>{
+  const p=fuels.find(f=>f.id==='ammonia')!.price.usdT;
+  expect(p[2030]).toBeGreaterThan(p[2035]);expect(p[2035]).toBeGreaterThan(p[2040]);expect(p[2040]).toBeGreaterThan(p[2050]);
+ });
+ it('reduces cellulosic bio-methanol between 2030 and 2050',()=>{
+  const p=fuels.find(f=>f.id==='cellulosic')!.price.usdT;
+  expect(p[2030]).toBeGreaterThan(p[2050]);
+ });
+ it('applies pathway-specific Low and High multipliers',()=>{
+  const e=fuels.find(f=>f.id==='eMethanol')!.price;
+  const food=fuels.find(f=>f.id==='foodBio')!.price;
+  expect(e.low.usdT[2030]).toBe(e.usdT[2030]*.8);expect(e.high.usdT[2030]).toBe(e.usdT[2030]*1.2);
+  expect(food.low.usdT[2030]).toBe(food.usdT[2030]*.9);expect(food.high.usdT[2030]).toBe(food.usdT[2030]*1.25);
+ });
+});
+
+describe('recommended compliant fuel ranking',()=>{
+ it('evaluates every alternative fuel and never recommends penalty pay as a fuel',()=>{
+  const ranking=rankCompliantFuels(makeVessels(10),fuels,2030,settings);
+  expect(ranking).toHaveLength(fuels.length-1);
+  expect(ranking.some(r=>r.fuel.id==='vlsfo')).toBe(false);
+  expect(ranking.filter(r=>r.best).every(r=>r.best!.penalty<.01)).toBe(true);
+  expect(ranking.filter(r=>r.best).every(r=>r.best!.label!=='Penalty pay')).toBe(true);
  });
 });
