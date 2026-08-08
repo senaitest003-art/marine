@@ -9,6 +9,7 @@ import {optimize} from './optimization';
 import {minimumDedicated,poolBalance} from './pooling';
 import {rankCompliantFuels} from './recommendation';
 import {energyToMass} from './units';
+import {CURRENT_SCHEMA_VERSION,migrateScenario,scenarioPayload} from '../scenarioStorage';
 
 describe('FuelEU',()=>{
  it('uses statutory targets',()=>{expect(targetCI(2030,settings)).toBeCloseTo(85.6904);expect(targetCI(2050,settings)).toBeCloseTo(18.232)});
@@ -92,5 +93,27 @@ describe('recommended compliant fuel ranking',()=>{
   expect(ranking.some(r=>r.fuel.id==='vlsfo')).toBe(false);
   expect(ranking.filter(r=>r.best).every(r=>r.best!.penalty<.01)).toBe(true);
   expect(ranking.filter(r=>r.best).every(r=>r.best!.label!=='Penalty pay')).toBe(true);
+ });
+});
+
+describe('scenario price schema migration',()=>{
+ it('replaces legacy price trajectories while preserving non-price assumptions',()=>{
+  const legacyFuels=structuredClone(fuels);
+  const methanol=legacyFuels.find(f=>f.id==='eMethanol')!;
+  methanol.ci=17;
+  Object.assign(methanol.price.usdT,{2030:1250,2035:1287.5,2040:1325,2050:1375});
+  const migrated=migrateScenario({settings:{...settings,baseCI:90},fuels:legacyFuels,fleet:makeVessels(3)})!;
+  expect(migrated.version).toBe(CURRENT_SCHEMA_VERSION);
+  expect(migrated.settings.baseCI).toBe(90);
+  expect(migrated.fleet).toHaveLength(3);
+  expect(migrated.fuels.find(f=>f.id==='eMethanol')!.ci).toBe(17);
+  expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.usdT).toEqual({2030:750,2035:680,2040:610,2050:520});
+  expect(migrated.fuels.find(f=>f.id==='ammonia')!.price.usdT).toEqual({2030:600,2035:540,2040:490,2050:430});
+ });
+ it('preserves user-edited prices in a version 2 scenario',()=>{
+  const savedFuels=structuredClone(fuels);
+  savedFuels.find(f=>f.id==='eMethanol')!.price.usdT[2035]=700;
+  const saved=scenarioPayload(settings,savedFuels,makeVessels(2));
+  expect(migrateScenario(saved)!.fuels.find(f=>f.id==='eMethanol')!.price.usdT[2035]).toBe(700);
  });
 });
