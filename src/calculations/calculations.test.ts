@@ -4,16 +4,16 @@ import {minimumBlend} from './blending';
 import {etsCost} from './euETS';
 import {fuelCost} from './fuelCost';
 import {blendCI,complianceBalance,effectiveCI,penalty,penaltyMultiplier,targetCI} from './fuelEU';
-import {eurPerGJFromEurPerT,normalizePrice} from './fuelPricing';
+import {eurPerGJFromEurPerT,normalizePrice,priceSeries} from './fuelPricing';
 import {optimize} from './optimization';
 import {dedicatedSelection,minimumDedicated,poolBalance} from './pooling';
-import {rankCompliantFuels} from './recommendation';
+import {compliantStrategiesForFuel,rankCompliantFuels} from './recommendation';
 import {energyToMass} from './units';
 import {CURRENT_SCHEMA_VERSION,migrateScenario,scenarioPayload} from '../scenarioStorage';
 import {externalCreditOption,option} from './optimization';
 
 describe('FuelEU',()=>{
- it('uses statutory targets',()=>{expect(targetCI(2030,settings)).toBeCloseTo(85.6904);expect(targetCI(2050,settings)).toBeCloseTo(18.232)});
+ it('uses statutory targets',()=>{expect(targetCI(2030,settings)).toBeCloseTo(85.6904);expect(targetCI(2035,settings)).toBeCloseTo(77.9418);expect(targetCI(2040,settings)).toBeCloseTo(62.9004);expect(targetCI(2050,settings)).toBeCloseTo(18.232)});
  it('finds exact compliant blend',()=>{const x=minimumBlend(fuels[0],fuels[4],2035,settings,405000);expect(x.feasible).toBe(true);expect(x.actualCI).toBeCloseTo(targetCI(2035,settings));expect(x.energyShare).toBeGreaterThan(0)});
  it('rejects ineligible and worse fuel',()=>{expect(minimumBlend(fuels[0],{...fuels[3],eligible:false},2030,settings,1).feasible).toBe(false);expect(minimumBlend(fuels[0],{...fuels[1],ci:100},2030,settings,1).reason).toContain('above FuelEU target')});
  it('handles zero energy',()=>expect(minimumBlend(fuels[0],fuels[4],2030,settings,0).altTonnes).toBe(0));
@@ -102,7 +102,34 @@ describe('recommended compliant fuel ranking',()=>{
   expect(ranking).toHaveLength(fuels.length-1);
   expect(ranking.some(r=>r.fuel.id==='vlsfo')).toBe(false);
   expect(ranking.filter(r=>r.best).every(r=>r.best!.penalty<.01)).toBe(true);
-  expect(ranking.filter(r=>r.best).every(r=>r.best!.label!=='Penalty pay')).toBe(true);
+  expect(ranking.filter(r=>r.best).every(r=>r.best!.strategy!=='Penalty Pay')).toBe(true);
+ });
+ it('keeps fuel and deployment strategy as separate typed result fields',()=>{
+  const fuel=fuels.find(f=>f.id==='eMethanol')!,fleet=makeVessels(10);
+  const uniform=option('Uniform Blending',fleet,fuels[0],fuel,.1,0,2030,settings);
+  const pooling=option('Dedicated Clean Fuel Vessel + Fleet Pooling',fleet,fuels[0],fuel,0,2,2030,settings);
+  expect(uniform.fuelName).toBe('e-Methanol');expect(pooling.fuelName).toBe('e-Methanol');
+  expect(uniform.strategy).toBe('Uniform Blending');expect(pooling.strategy).toBe('Dedicated Clean Fuel Vessel + Fleet Pooling');
+ });
+ it('returns one row per alternative fuel and its cheapest compliant strategy',()=>{
+  const ranking=rankCompliantFuels(makeVessels(10),fuels,2030,settings);
+  expect(new Set(ranking.map(r=>r.fuel.id)).size).toBe(fuels.length-1);
+  for(const row of ranking.filter(r=>r.best)){
+   expect(row.best!.fuelId).toBe(row.fuel.id);expect(row.best!.fuelEUPenalty).toBeLessThan(.01);
+   expect(row.best!.strategy).not.toBe('Penalty Pay');
+   const candidates=compliantStrategiesForFuel(makeVessels(10),fuels[0],row.fuel,2030,settings);
+   expect(row.best!.totalComplianceCost).toBeCloseTo(Math.min(...candidates.map(x=>x.totalComplianceCost)),6);
+  }
+ });
+ it('separates all-fuel cost, clean-fuel cost, and total compliance cost',()=>{
+  const fleet=makeVessels(1),base=fuels[0],alt=fuels.find(f=>f.id==='eMethanol')!,share=.25;
+  const result=option('Uniform Blending',fleet,base,alt,share,0,2030,settings);
+  const altEnergy=fleet[0].energyGJ*share*(1-alt.pilotShare),baseEnergy=fleet[0].energyGJ*(1-share+share*alt.pilotShare);
+  const expectedClean=altEnergy*priceSeries(alt.price,settings.scenario).eurGJ[2030];
+  const expectedBase=baseEnergy*priceSeries(base.price,settings.scenario).eurGJ[2030];
+  expect(result.cleanFuelCost).toBeCloseTo(expectedClean,8);
+  expect(result.fuelCost).toBeCloseTo(expectedBase+expectedClean,8);
+  expect(result.totalComplianceCost).toBeCloseTo(result.fuelCost+result.etsCost+result.fuelEUPenalty+result.annualizedCapex+result.externalCreditCost+result.other,8);
  });
 });
 
@@ -138,7 +165,7 @@ describe('decision-engine regulatory integrations',()=>{
  });
  it('applies vessel ETS scope exactly',()=>{
   const full=makeVessels(1),half=structuredClone(full);half[0].etsScope=.5;
-  const a=option('baseline',full,fuels[0],fuels[0],0,0,2030,settings),b=option('baseline',half,fuels[0],fuels[0],0,0,2030,settings);
+  const a=option('Penalty Pay',full,fuels[0],fuels[0],0,0,2030,settings),b=option('Penalty Pay',half,fuels[0],fuels[0],0,0,2030,settings);
   expect(b.ets).toBeCloseTo(a.ets*.5,8);
  });
  it('weights only RFNBO denominator and leaves actual emissions numerator unchanged',()=>{
@@ -150,7 +177,7 @@ describe('decision-engine regulatory integrations',()=>{
  it('accounts for ammonia pilot fuel in CI and ETS',()=>{
   const ammonia=fuels.find(f=>f.id==='ammonia')!,pure={...ammonia,pilotShare:0},pilot={...ammonia,pilotShare:.05};
   expect(blendCI(fuels[0],pilot,1,2035,settings)).toBeGreaterThan(blendCI(fuels[0],pure,1,2035,settings));
-  const fleet=makeVessels(1),pureCost=option('pure',fleet,fuels[0],pure,1,0,2035,settings),pilotCost=option('pilot',fleet,fuels[0],pilot,1,0,2035,settings);
+  const fleet=makeVessels(1),pureCost=option('Uniform Blending',fleet,fuels[0],pure,1,0,2035,settings),pilotCost=option('Uniform Blending',fleet,fuels[0],pilot,1,0,2035,settings);
   expect(pilotCost.ets).toBeGreaterThan(pureCost.ets);
  });
  it('escalates consecutive non-compliance penalty',()=>{
@@ -164,7 +191,7 @@ describe('decision-engine regulatory integrations',()=>{
  it('annualizes CAPEX only across vessels that use the alternative fuel',()=>{
   const fleet=makeVessels(10),fuel={...fuels.find(f=>f.id==='eMethanol')!,capex:10_000_000};
   const count=minimumDedicated(fleet,fuels[0],fuel,2030,settings);
-  const uniform=option('uniform',fleet,fuels[0],fuel,.1,0,2030,settings),dedicated=option('dedicated',fleet,fuels[0],fuel,0,count,2030,settings);
+  const uniform=option('Uniform Blending',fleet,fuels[0],fuel,.1,0,2030,settings),dedicated=option('Dedicated Clean Fuel Vessel + Fleet Pooling',fleet,fuels[0],fuel,0,count,2030,settings);
   expect(uniform.capex).toBeGreaterThan(dedicated.capex);
  });
  it('allows low-priced external compliance credit to be a zero-penalty option',()=>{
