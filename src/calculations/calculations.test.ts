@@ -12,7 +12,7 @@ import {compliantStrategiesForFuel,rankCompliantFuels} from './recommendation';
 import {energyToMass} from './units';
 import {CURRENT_SCHEMA_VERSION,migrateScenario,scenarioPayload} from '../scenarioStorage';
 import {externalCreditOption,option} from './optimization';
-import {annualizedCapex,capitalRecoveryFactor,initialConversionCapex} from './capex';
+import {annualizedCapex,capitalRecoveryFactor,initialConversionCapex,retrofitRecoveryLife,vesselRemainingUsefulLife} from './capex';
 import {NAV} from '../navigation';
 
 describe('FuelEU',()=>{
@@ -242,8 +242,25 @@ describe('decision-engine regulatory integrations',()=>{
   expect(initialConversionCapex(fuels.find(f=>f.id==='cellulosic')!,compatible,settings)).toBe(0);
   const newbuild=structuredClone(three);newbuild.forEach(v=>v.conversionMode='Newbuild / Replacement');
   expect(initialConversionCapex(fuel,newbuild,settings)).toBeCloseTo(3*fuel.newbuildPremiumUsd.Base/settings.eurUsd,6);
+  expect(annualizedCapex(fuel,newbuild,settings)).toBeCloseTo(initialConversionCapex(fuel,newbuild,settings)*capitalRecoveryFactor(.08,25),6);
   const crf=capitalRecoveryFactor(.08,15);expect(crf).toBeCloseTo(.1168295,6);
   expect(annualizedCapex(fuel,three,settings)).toBeCloseTo(initialConversionCapex(fuel,three,settings)*crf,6);
+ });
+ it('limits retrofit recovery to the shorter of remaining vessel and retrofit asset life',()=>{
+  const fuel=fuels.find(f=>f.id==='eMethanol')!,vessel=makeVessels(1)[0];
+  vessel.vesselAge=17;vessel.expectedTotalLife=25;vessel.remainingUsefulLife=8;
+  expect(vesselRemainingUsefulLife(vessel)).toBe(8);expect(retrofitRecoveryLife(fuel,vessel)).toBe(8);
+  vessel.vesselAge=5;vessel.expectedTotalLife=25;vessel.remainingUsefulLife=20;
+  expect(retrofitRecoveryLife(fuel,vessel)).toBe(15);
+ });
+ it('uses CRF and makes old-vessel retrofit annualization materially higher',()=>{
+  expect(capitalRecoveryFactor(.08,15)).toBeCloseTo(.1168295,6);
+  expect(capitalRecoveryFactor(.08,10)).toBeCloseTo(.1490295,6);
+  expect(capitalRecoveryFactor(.08,5)).toBeCloseTo(.2504565,6);
+  const fuel=fuels.find(f=>f.id==='eMethanol')!,old=makeVessels(1),standard=makeVessels(1);
+  old[0].vesselAge=20;old[0].expectedTotalLife=25;old[0].remainingUsefulLife=5;
+  expect(annualizedCapex(fuel,old,settings)).toBeGreaterThan(annualizedCapex(fuel,standard,settings));
+  old[0].conversionMode='Already Compatible';expect(annualizedCapex(fuel,old,settings)).toBe(0);
  });
  it('allows low-priced external compliance credit to be a zero-penalty option',()=>{
   const credit=externalCreditOption(makeVessels(2),fuels[0],2030,{...settings,externalCreditAvailable:true,externalCreditPrice:1})!;
