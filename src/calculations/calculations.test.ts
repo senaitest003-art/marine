@@ -105,13 +105,14 @@ describe('long-term planning price trajectories',()=>{
  it('uses explicit delivered-price decks rather than generic multipliers',()=>{
   const decks={
    vlsfo:[[550,575,600,625],[450,475,500,525],[700,725,750,775]],
-   lng:[[750,725,700,700],[600,600,600,600],[950,900,850,850]],
-   cellulosic:[[750,700,650,600],[600,550,500,450],[950,900,850,800]],
+   lng:[[775,775,800,800],[600,600,625,625],[1000,1000,1050,1050]],
+   cellulosic:[[1000,900,825,750],[800,725,650,600],[1250,1150,1050,950]],
    foodBio:[[850,825,800,800],[700,675,650,650],[1050,1025,1000,1000]],
    eMethanol:[[1200,1000,850,650],[900,750,650,500],[1600,1400,1200,900]],
    ammonia:[[950,850,750,650],[700,650,575,500],[1250,1100,950,800]],
    blueMethanol:[[650,625,600,575],[500,475,450,425],[850,825,800,750]],
   } as const;
+  const cellulosic=fuels.find(f=>f.id==='cellulosic')!;expect(cellulosic.price.usdT[2030]/cellulosic.lcv).toBeCloseTo(50.251256,6);
   for(const [id,[base,low,high]] of Object.entries(decks)){
    const fuel=fuels.find(f=>f.id===id)!;
    expect(Object.values(fuel.price.usdT)).toEqual(base);
@@ -174,8 +175,8 @@ describe('scenario price schema migration',()=>{
   expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.low.usdT).toEqual({2030:900,2035:750,2040:650,2050:500});
   expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.high.usdT).toEqual({2030:1600,2035:1400,2040:1200,2050:900});
   expect(migrated.fuels.find(f=>f.id==='vlsfo')!.price.usdT).toEqual({2030:550,2035:575,2040:600,2050:625});
-  expect(migrated.fuels.find(f=>f.id==='lng')!.price.usdT).toEqual({2030:750,2035:725,2040:700,2050:700});
-  expect(migrated.fuels.find(f=>f.id==='cellulosic')!.price.usdT).toEqual({2030:750,2035:700,2040:650,2050:600});
+  expect(migrated.fuels.find(f=>f.id==='lng')!.price.usdT).toEqual({2030:775,2035:775,2040:800,2050:800});
+  expect(migrated.fuels.find(f=>f.id==='cellulosic')!.price.usdT).toEqual({2030:1000,2035:900,2040:825,2050:750});
   expect(migrated.fuels.find(f=>f.id==='foodBio')!.price.usdT).toEqual({2030:850,2035:825,2040:800,2050:800});
   expect(migrated.fuels.find(f=>f.id==='ammonia')!.price.usdT).toEqual({2030:950,2035:850,2040:750,2050:650});
   expect(migrated.fuels.find(f=>f.id==='blueMethanol')!.price.usdT).toEqual({2030:650,2035:625,2040:600,2050:575});
@@ -185,6 +186,16 @@ describe('scenario price schema migration',()=>{
   savedFuels.find(f=>f.id==='eMethanol')!.price.usdT[2035]=700;
   const saved=scenarioPayload(settings,savedFuels,makeVessels(2));
   expect(migrateScenario(saved)!.fuels.find(f=>f.id==='eMethanol')!.price.usdT[2035]).toBe(700);
+ });
+ it('migrates version 5 LNG and cellulosic decks without overwriting other edited fuels',()=>{
+  const savedFuels=structuredClone(fuels);
+  savedFuels.find(f=>f.id==='lng')!.price.usdT[2030]=700;
+  savedFuels.find(f=>f.id==='cellulosic')!.price.usdT[2030]=700;
+  savedFuels.find(f=>f.id==='vlsfo')!.price.usdT[2030]=560;
+  const migrated=migrateScenario({version:5,settings,fuels:savedFuels,fleet:makeVessels(2)})!;
+  expect(migrated.fuels.find(f=>f.id==='lng')!.price.usdT).toEqual({2030:775,2035:775,2040:800,2050:800});
+  expect(migrated.fuels.find(f=>f.id==='cellulosic')!.price.usdT).toEqual({2030:1000,2035:900,2040:825,2050:750});
+  expect(migrated.fuels.find(f=>f.id==='vlsfo')!.price.usdT[2030]).toBe(560);
  });
 });
 
