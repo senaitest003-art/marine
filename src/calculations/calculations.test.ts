@@ -1,5 +1,6 @@
 import {describe,expect,it} from 'vitest';
 import {fuels,makeVessels,settings} from '../data';
+import {YEARS} from '../types';
 import {minimumBlend} from './blending';
 import {etsCost} from './euETS';
 import {fuelCost} from './fuelCost';
@@ -94,16 +95,30 @@ describe('long-term planning price trajectories',()=>{
   const p=fuels.find(f=>f.id==='eMethanol')!.price;
   expect(p.usdT).toEqual({2030:1200,2035:1000,2040:850,2050:650});
   expect(p.low.usdT).toEqual({2030:900,2035:750,2040:650,2050:500});
-  expect(p.high.usdT).toEqual({2030:1500,2035:1300,2040:1100,2050:900});
+  expect(p.high.usdT).toEqual({2030:1600,2035:1400,2040:1200,2050:900});
   expect(p.eurGJ[2030]).toBeCloseTo((1200/settings.eurUsd)/19.9,8);
  });
  it('uses the shared methanol retrofit screening CAPEX and simplified navigation',()=>{
   for(const id of ['cellulosic','foodBio','eMethanol','blueMethanol'])expect(fuels.find(f=>f.id===id)!.retrofitCapexUsd.Base).toBe(10_500_000);
   expect(NAV).not.toContain('Cost Optimization');expect(NAV).not.toContain('Sensitivity');
  });
- it('applies pathway-specific Low and High multipliers',()=>{
-  const food=fuels.find(f=>f.id==='foodBio')!.price;
-  expect(food.low.usdT[2030]).toBe(food.usdT[2030]*.9);expect(food.high.usdT[2030]).toBe(food.usdT[2030]*1.25);
+ it('uses explicit delivered-price decks rather than generic multipliers',()=>{
+  const decks={
+   vlsfo:[[550,575,600,625],[450,475,500,525],[700,725,750,775]],
+   lng:[[750,725,700,700],[600,600,600,600],[950,900,850,850]],
+   cellulosic:[[750,700,650,600],[600,550,500,450],[950,900,850,800]],
+   foodBio:[[850,825,800,800],[700,675,650,650],[1050,1025,1000,1000]],
+   eMethanol:[[1200,1000,850,650],[900,750,650,500],[1600,1400,1200,900]],
+   ammonia:[[950,850,750,650],[700,650,575,500],[1250,1100,950,800]],
+   blueMethanol:[[650,625,600,575],[500,475,450,425],[850,825,800,750]],
+  } as const;
+  for(const [id,[base,low,high]] of Object.entries(decks)){
+   const fuel=fuels.find(f=>f.id===id)!;
+   expect(Object.values(fuel.price.usdT)).toEqual(base);
+   expect(Object.values(fuel.price.low.usdT)).toEqual(low);
+   expect(Object.values(fuel.price.high.usdT)).toEqual(high);
+   for(const year of YEARS){expect(fuel.price.eurT[year]).toBeCloseTo(fuel.price.usdT[year]/settings.eurUsd,8);expect(fuel.price.eurGJ[year]).toBeCloseTo(fuel.price.eurT[year]/fuel.lcv,8)}
+  }
  });
 });
 
@@ -157,8 +172,13 @@ describe('scenario price schema migration',()=>{
   expect(migrated.fuels.find(f=>f.id==='eMethanol')!.ci).toBe(17);
   expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.usdT).toEqual({2030:1200,2035:1000,2040:850,2050:650});
   expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.low.usdT).toEqual({2030:900,2035:750,2040:650,2050:500});
-  expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.high.usdT).toEqual({2030:1500,2035:1300,2040:1100,2050:900});
-  expect(migrated.fuels.find(f=>f.id==='ammonia')!.price.usdT).toEqual({2030:600,2035:540,2040:490,2050:430});
+  expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.high.usdT).toEqual({2030:1600,2035:1400,2040:1200,2050:900});
+  expect(migrated.fuels.find(f=>f.id==='vlsfo')!.price.usdT).toEqual({2030:550,2035:575,2040:600,2050:625});
+  expect(migrated.fuels.find(f=>f.id==='lng')!.price.usdT).toEqual({2030:750,2035:725,2040:700,2050:700});
+  expect(migrated.fuels.find(f=>f.id==='cellulosic')!.price.usdT).toEqual({2030:750,2035:700,2040:650,2050:600});
+  expect(migrated.fuels.find(f=>f.id==='foodBio')!.price.usdT).toEqual({2030:850,2035:825,2040:800,2050:800});
+  expect(migrated.fuels.find(f=>f.id==='ammonia')!.price.usdT).toEqual({2030:950,2035:850,2040:750,2050:650});
+  expect(migrated.fuels.find(f=>f.id==='blueMethanol')!.price.usdT).toEqual({2030:650,2035:625,2040:600,2050:575});
  });
  it('preserves user-edited prices in a current-version scenario',()=>{
   const savedFuels=structuredClone(fuels);
