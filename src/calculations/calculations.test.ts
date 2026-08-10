@@ -11,6 +11,8 @@ import {compliantStrategiesForFuel,rankCompliantFuels} from './recommendation';
 import {energyToMass} from './units';
 import {CURRENT_SCHEMA_VERSION,migrateScenario,scenarioPayload} from '../scenarioStorage';
 import {externalCreditOption,option} from './optimization';
+import {annualizedCapex,capitalRecoveryFactor,initialConversionCapex} from './capex';
+import {NAV} from '../navigation';
 
 describe('FuelEU',()=>{
  it('uses statutory targets',()=>{expect(targetCI(2030,settings)).toBeCloseTo(85.6904);expect(targetCI(2035,settings)).toBeCloseTo(77.9418);expect(targetCI(2040,settings)).toBeCloseTo(62.9004);expect(targetCI(2050,settings)).toBeCloseTo(18.232)});
@@ -88,10 +90,19 @@ describe('long-term planning price trajectories',()=>{
   const p=fuels.find(f=>f.id==='cellulosic')!.price.usdT;
   expect(p[2030]).toBeGreaterThan(p[2050]);
  });
+ it('uses the market-based e-Methanol Low, Base and High decks',()=>{
+  const p=fuels.find(f=>f.id==='eMethanol')!.price;
+  expect(p.usdT).toEqual({2030:1200,2035:1000,2040:850,2050:650});
+  expect(p.low.usdT).toEqual({2030:900,2035:750,2040:650,2050:500});
+  expect(p.high.usdT).toEqual({2030:1500,2035:1300,2040:1100,2050:900});
+  expect(p.eurGJ[2030]).toBeCloseTo((1200/settings.eurUsd)/19.9,8);
+ });
+ it('uses the shared methanol retrofit screening CAPEX and simplified navigation',()=>{
+  for(const id of ['cellulosic','foodBio','eMethanol','blueMethanol'])expect(fuels.find(f=>f.id===id)!.retrofitCapexUsd.Base).toBe(10_500_000);
+  expect(NAV).not.toContain('Cost Optimization');expect(NAV).not.toContain('Sensitivity');
+ });
  it('applies pathway-specific Low and High multipliers',()=>{
-  const e=fuels.find(f=>f.id==='eMethanol')!.price;
   const food=fuels.find(f=>f.id==='foodBio')!.price;
-  expect(e.low.usdT[2030]).toBe(e.usdT[2030]*.8);expect(e.high.usdT[2030]).toBe(e.usdT[2030]*1.2);
   expect(food.low.usdT[2030]).toBe(food.usdT[2030]*.9);expect(food.high.usdT[2030]).toBe(food.usdT[2030]*1.25);
  });
 });
@@ -144,10 +155,12 @@ describe('scenario price schema migration',()=>{
   expect(migrated.settings.baseCI).toBe(90);
   expect(migrated.fleet).toHaveLength(3);
   expect(migrated.fuels.find(f=>f.id==='eMethanol')!.ci).toBe(17);
-  expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.usdT).toEqual({2030:750,2035:680,2040:610,2050:520});
+  expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.usdT).toEqual({2030:1200,2035:1000,2040:850,2050:650});
+  expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.low.usdT).toEqual({2030:900,2035:750,2040:650,2050:500});
+  expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.high.usdT).toEqual({2030:1500,2035:1300,2040:1100,2050:900});
   expect(migrated.fuels.find(f=>f.id==='ammonia')!.price.usdT).toEqual({2030:600,2035:540,2040:490,2050:430});
  });
- it('preserves user-edited prices in a version 2 scenario',()=>{
+ it('preserves user-edited prices in a current-version scenario',()=>{
   const savedFuels=structuredClone(fuels);
   savedFuels.find(f=>f.id==='eMethanol')!.price.usdT[2035]=700;
   const saved=scenarioPayload(settings,savedFuels,makeVessels(2));
@@ -188,11 +201,18 @@ describe('decision-engine regulatory integrations',()=>{
   const result=dedicatedSelection(fleet,fuels[0],fuels.find(f=>f.id==='eMethanol')!,2030,settings);
   expect(result.vesselIds[0]).toBe(fleet[1].id);expect(result.feasible).toBe(true);
  });
- it('annualizes CAPEX only across vessels that use the alternative fuel',()=>{
-  const fleet=makeVessels(10),fuel={...fuels.find(f=>f.id==='eMethanol')!,capex:10_000_000};
-  const count=minimumDedicated(fleet,fuels[0],fuel,2030,settings);
-  const uniform=option('Uniform Blending',fleet,fuels[0],fuel,.1,0,2030,settings),dedicated=option('Dedicated Clean Fuel Vessel + Fleet Pooling',fleet,fuels[0],fuel,0,count,2030,settings);
-  expect(uniform.capex).toBeGreaterThan(dedicated.capex);
+ it('annualizes conversion CAPEX only across vessels that use the alternative fuel',()=>{
+  const fleet=makeVessels(10),fuel=fuels.find(f=>f.id==='eMethanol')!;
+  const uniform=option('Uniform Blending',fleet,fuels[0],fuel,.1,0,2030,settings);
+  expect(uniform.initialConversionCapex).toBeCloseTo(10*fuel.retrofitCapexUsd.Base/settings.eurUsd,6);
+  const three=fleet.slice(0,3);expect(initialConversionCapex(fuel,three,settings)).toBeCloseTo(3*fuel.retrofitCapexUsd.Base/settings.eurUsd,6);
+  const compatible=structuredClone(three);compatible.forEach(v=>v.convertedFuels.push('eMethanol'));
+  expect(initialConversionCapex(fuel,compatible,settings)).toBe(0);
+  expect(initialConversionCapex(fuels.find(f=>f.id==='cellulosic')!,compatible,settings)).toBe(0);
+  const newbuild=structuredClone(three);newbuild.forEach(v=>v.conversionMode='Newbuild / Replacement');
+  expect(initialConversionCapex(fuel,newbuild,settings)).toBeCloseTo(3*fuel.newbuildPremiumUsd.Base/settings.eurUsd,6);
+  const crf=capitalRecoveryFactor(.08,15);expect(crf).toBeCloseTo(.1168295,6);
+  expect(annualizedCapex(fuel,three,settings)).toBeCloseTo(initialConversionCapex(fuel,three,settings)*crf,6);
  });
  it('allows low-priced external compliance credit to be a zero-penalty option',()=>{
   const credit=externalCreditOption(makeVessels(2),fuels[0],2030,{...settings,externalCreditAvailable:true,externalCreditPrice:1})!;
