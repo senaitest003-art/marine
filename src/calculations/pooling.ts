@@ -1,10 +1,13 @@
 import {Fuel,Settings,Vessel,Year} from '../types';
 import {minimumBlend} from './blending';
 import {blendCI,complianceBalance,effectiveCI,targetCI} from './fuelEU';
+import {fuelAvailabilityLimit,pathwayAvailable,vesselCanUseFuel} from './fuelConstraints';
 
 export interface DedicatedSelection{count:number;vesselIds:string[];balance:number;feasible:boolean}
 export const dedicatedSelection=(fleet:Vessel[],base:Fuel,alt:Fuel,year:Year,s:Settings):DedicatedSelection=>{
+ if(!pathwayAvailable(alt,year))return{count:Infinity,vesselIds:[],balance:Number.NEGATIVE_INFINITY,feasible:false};
  const target=targetCI(year,s);
+ const fleetEnergy=fleet.reduce((sum,v)=>sum+v.energyGJ*v.fuelEUScope,0),energyBudget=fleetEnergy*fuelAvailabilityLimit(alt,year);
  let balance=s.bankedSurplus+s.borrowedBalance;
  const candidates=fleet.map(v=>{
   const energyMJ=v.energyGJ*1000*v.fuelEUScope;
@@ -14,9 +17,10 @@ export const dedicatedSelection=(fleet:Vessel[],base:Fuel,alt:Fuel,year:Year,s:S
   const clean=complianceBalance(energyMJ,cleanCI,target);
   balance+=fossil;
   return{v,improvement:clean-fossil};
- }).filter(x=>x.v.ready&&x.v.compatible.includes(alt.id)&&x.v.maxBlend>=1&&x.improvement>0).sort((a,b)=>b.improvement-a.improvement||a.v.id.localeCompare(b.v.id));
+ }).filter(x=>vesselCanUseFuel(x.v,alt)&&x.v.maxBlend>=1&&x.improvement>0).sort((a,b)=>b.improvement-a.improvement||a.v.id.localeCompare(b.v.id));
  const ids:string[]=[];
- for(const candidate of candidates){if(balance>=0)break;balance+=candidate.improvement;ids.push(candidate.v.id)}
+ let usedEnergy=0;
+ for(const candidate of candidates){if(balance>=0)break;const candidateEnergy=candidate.v.energyGJ*candidate.v.fuelEUScope;if(usedEnergy+candidateEnergy>energyBudget+1e-8)continue;usedEnergy+=candidateEnergy;balance+=candidate.improvement;ids.push(candidate.v.id)}
  return{count:balance>=0?ids.length:Infinity,vesselIds:ids,balance,feasible:balance>=0};
 };
 export const minimumDedicated=(fleet:Vessel[],base:Fuel,alt:Fuel,year:Year,s:Settings)=>dedicatedSelection(fleet,base,alt,year,s).count;

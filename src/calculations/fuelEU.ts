@@ -1,8 +1,9 @@
 import {Fuel,Settings,Year} from '../types';
+import {hasUsableCertification} from './fuelConstraints';
 export const targetCI=(year:Year,s:Settings)=>s.baseCI*(1-s.reduction[year]);
 export const effectiveCI=(f:Fuel,_year:Year,s:Settings,slip?:number)=>{
- if(!f.eligible)return s.baseCI;
- const base=f.blue?.advanced?f.blue.upstream+f.blue.production*(1-f.blue.capture)+f.blue.residual+f.blue.leakage+f.blue.transport:f.ci;
+ if(!hasUsableCertification(f))return s.baseCI;
+ const base=f.blue?.advanced?f.blue.upstream+f.blue.production*(1-f.blue.capture)+f.blue.residual+f.blue.leakage+f.blue.transport:f.certifiedWtWCI;
  if(f.id!=='lng'&&f.id!=='bioLng')return base;
  // `Fuel.ci` is the user-entered, final WtW intensity at the fuel's reference
  // methane-slip assumption (`Fuel.slip`).  Engine selection must therefore

@@ -2,17 +2,19 @@ import {Fuel,Settings,Vessel,Year} from '../types';
 import {minimumBlend} from './blending';
 import {option,Option} from './optimization';
 import {minimumDedicated} from './pooling';
+import {pathwayAvailable} from './fuelConstraints';
 
 export interface FuelRankingResult{fuel:Fuel;best?:Option}
 
 /** Builds the compliant deployment alternatives for one physical fuel. */
 export const compliantStrategiesForFuel=(fleet:Vessel[],base:Fuel,fuel:Fuel,year:Year,s:Settings):Option[]=>{
  const candidates:Option[]=[],energy=fleet.reduce((sum,v)=>sum+v.energyGJ*v.fuelEUScope,0);
+ if(!pathwayAvailable(fuel,year))return candidates;
  const slip=(fuel.id==='lng'||fuel.id==='bioLng')?fleet.reduce((sum,v)=>sum+s.lngSlip[v.engine]*v.energyGJ*v.fuelEUScope,0)/Math.max(1,energy):0;
  const blend=minimumBlend(base,fuel,year,s,energy,slip);
  if(blend.feasible){const uniform=option('Uniform Blending',fleet,base,fuel,blend.energyShare,0,year,s);if(uniform.fuelEUPenalty<.01&&!uniform.technicalLimit)candidates.push(uniform)}
  const dedicated=minimumDedicated(fleet,base,fuel,year,s);
- if(fuel.eligible&&dedicated<=fleet.length){const pooling=option('Dedicated Clean Fuel Vessel + Fleet Pooling',fleet,base,fuel,0,dedicated,year,s);if(pooling.fuelEUPenalty<.01&&pooling.cleanFuelDemandTonnes<=fuel.maxSupply)candidates.push(pooling)}
+ if(fuel.eligible&&dedicated<=fleet.length){const pooling=option('Dedicated Clean Fuel Vessel + Fleet Pooling',fleet,base,fuel,0,dedicated,year,s);if(pooling.fuelEUPenalty<.01&&!pooling.technicalLimit&&pooling.cleanFuelDemandTonnes<=fuel.maxSupply)candidates.push(pooling)}
  return candidates;
 };
 

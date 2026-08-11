@@ -18,7 +18,7 @@ import {NAV} from '../navigation';
 describe('FuelEU',()=>{
  it('uses statutory targets',()=>{expect(targetCI(2030,settings)).toBeCloseTo(85.6904);expect(targetCI(2035,settings)).toBeCloseTo(77.9418);expect(targetCI(2040,settings)).toBeCloseTo(62.9004);expect(targetCI(2050,settings)).toBeCloseTo(18.232)});
  it('finds exact compliant blend',()=>{const x=minimumBlend(fuels[0],fuels[4],2035,settings,405000);expect(x.feasible).toBe(true);expect(x.actualCI).toBeCloseTo(targetCI(2035,settings));expect(x.energyShare).toBeGreaterThan(0)});
- it('rejects ineligible and worse fuel',()=>{expect(minimumBlend(fuels[0],{...fuels[3],eligible:false},2030,settings,1).feasible).toBe(false);expect(minimumBlend(fuels[0],{...fuels[1],ci:100},2030,settings,1).reason).toContain('above FuelEU target')});
+ it('rejects ineligible and worse fuel',()=>{expect(minimumBlend(fuels[0],{...fuels[3],eligible:false},2030,settings,1).feasible).toBe(false);expect(minimumBlend(fuels[0],{...fuels[1],ci:100,certifiedWtWCI:100},2030,settings,1).reason).toContain('above FuelEU target')});
  it('handles zero energy',()=>expect(minimumBlend(fuels[0],fuels[4],2030,settings,0).altTonnes).toBe(0));
  it('computes signed balances and penalty',()=>{expect(complianceBalance(1e6,80,70)).toBe(-10);expect(penalty(-10,80,2400)).toBeGreaterThan(0)});
 });
@@ -171,6 +171,7 @@ describe('scenario price schema migration',()=>{
   expect(migrated.settings.baseCI).toBe(90);
   expect(migrated.fleet).toHaveLength(3);
   expect(migrated.fuels.find(f=>f.id==='eMethanol')!.ci).toBe(17);
+  expect(migrated.fuels.find(f=>f.id==='eMethanol')!.certifiedWtWCI).toBe(17);
   expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.usdT).toEqual({2030:1200,2035:1000,2040:850,2050:650});
   expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.low.usdT).toEqual({2030:900,2035:750,2040:650,2050:500});
   expect(migrated.fuels.find(f=>f.id==='eMethanol')!.price.high.usdT).toEqual({2030:1600,2035:1400,2040:1200,2050:900});
@@ -229,7 +230,8 @@ describe('decision-engine regulatory integrations',()=>{
  });
  it('selects heterogeneous dedicated vessels by actual compliance contribution',()=>{
   const fleet=makeVessels(3);fleet[0].energyGJ=100000;fleet[1].energyGJ=900000;fleet[2].energyGJ=200000;
-  const result=dedicatedSelection(fleet,fuels[0],fuels.find(f=>f.id==='eMethanol')!,2030,settings);
+  const source=fuels.find(f=>f.id==='eMethanol')!,fuel={...source,availability:{...source.availability,2030:1}};
+  const result=dedicatedSelection(fleet,fuels[0],fuel,2030,settings);
   expect(result.vesselIds[0]).toBe(fleet[1].id);expect(result.feasible).toBe(true);
  });
  it('annualizes conversion CAPEX only across vessels that use the alternative fuel',()=>{
@@ -265,5 +267,38 @@ describe('decision-engine regulatory integrations',()=>{
  it('allows low-priced external compliance credit to be a zero-penalty option',()=>{
   const credit=externalCreditOption(makeVessels(2),fuels[0],2030,{...settings,externalCreditAvailable:true,externalCreditPrice:1})!;
   expect(credit.penalty).toBe(0);expect(credit.externalCredit).toBeGreaterThan(0);expect(credit.balance).toBe(0);
+ });
+});
+
+describe('fuel transition realism constraints',()=>{
+ it('classifies Blue Methanol as conditional and never RFNBO',()=>{
+  const blue=fuels.find(f=>f.id==='blueMethanol')!;
+  expect(blue.role).toBe('Conditional Low-Carbon / Transition Fuel');expect(blue.rfnbo).toBe(false);
+ });
+ it('rejects Blue Methanol for standalone 2050 compliance when certified CI is 48',()=>{
+  const blue={...fuels.find(f=>f.id==='blueMethanol')!,maxBlend:1,availability:{...fuels.find(f=>f.id==='blueMethanol')!.availability,2050:1}};
+  const result=minimumBlend(fuels[0],blue,2050,settings,405000);
+  expect(targetCI(2050,settings)).toBeCloseTo(18.232);expect(result.feasible).toBe(false);expect(result.reason).toContain('above FuelEU target');
+ });
+ it('rejects LNG in 2040 but permits low-slip certified LNG in 2030',()=>{
+  const lng=fuels.find(f=>f.id==='lng')!;
+  expect(minimumBlend(fuels[0],lng,2040,settings,405000,lng.slip).feasible).toBe(false);
+  expect(minimumBlend(fuels[0],lng,2030,settings,405000,lng.slip).feasible).toBe(true);
+ });
+ it('allows Green Ammonia in 2050 when CI, availability and compatibility allow',()=>{
+  const ammonia=fuels.find(f=>f.id==='ammonia')!;
+  expect(ammonia.certifiedWtWCI).toBeLessThan(targetCI(2050,settings));
+  expect(minimumBlend(fuels[0],ammonia,2050,settings,405000).feasible).toBe(true);
+ });
+ it('prevents recommendations from exceeding year-specific fleet energy availability',()=>{
+  const source=fuels.find(f=>f.id==='eMethanol')!,limited={...source,availability:{...source.availability,2030:.001}};
+  expect(compliantStrategiesForFuel(makeVessels(10),fuels[0],limited,2030,settings)).toHaveLength(0);
+  const result=minimumBlend(fuels[0],limited,2030,settings,405000);
+  expect(result.feasible).toBe(false);expect(result.reason).toContain('maximum blend');
+ });
+ it('requires valid certification and bunkering access',()=>{
+  const source=fuels.find(f=>f.id==='eMethanol')!;
+  expect(minimumBlend(fuels[0],{...source,certificationValid:false},2030,settings,405000).reason).toContain('certified');
+  expect(minimumBlend(fuels[0],{...source,bunkeringAvailability:{...source.bunkeringAvailability,2030:'Unavailable'}},2030,settings,405000).reason).toContain('unavailable');
  });
 });

@@ -1,6 +1,7 @@
 import {Fuel,Settings,Year} from '../types';
 import {blendCI,effectiveCI,reward,targetCI} from './fuelEU';
 import {energyToMass} from './units';
+import {fuelAvailabilityLimit,hasBunkeringAccess,hasUsableCertification} from './fuelConstraints';
 
 export interface BlendDetails {
  bunkerCI:number;
@@ -42,13 +43,15 @@ export const minimumBlend=(base:Fuel,alt:Fuel,year:Year,s:Settings,energyGJ:numb
  // exactly to (bunker-target)/(bunker-alternative).
  const denominator=bunker-alternative+target*(factor-1)*(1-alt.pilotShare);
  const raw=numerator/denominator;
- const max=Math.min(1,Math.max(0,alt.maxBlend));
+ const max=Math.min(1,Math.max(0,alt.maxBlend),fuelAvailabilityLimit(alt,year));
  const baseDetails={bunkerCI:bunker,alternativeCI:alternative,targetCI:target,
   rfnboFactor:factor,numerator,denominator,rawMinimumBlend:raw,
   maximumAllowedBlend:max,actualCI:bunker,reason:''};
  const baseMass=energyToMass(energyGJ,base.lcv);
 
  if(!alt.eligible)return failed({...baseDetails,reason:'Alternative fuel is not FuelEU eligible'},Number.NaN,baseMass);
+ if(!alt.certificationValid||!hasUsableCertification(alt))return failed({...baseDetails,reason:'A valid certified FuelEU WtW CI is required'},Number.NaN,baseMass);
+ if(!hasBunkeringAccess(alt,year))return failed({...baseDetails,reason:`Bunkering is unavailable in ${year}`},Number.NaN,baseMass);
  if(alt.maxSupply<=0)return failed({...baseDetails,reason:'Alternative fuel annual supply is zero'},Number.NaN,baseMass);
  if(bunker<=target)return{feasible:true,energyShare:0,massShare:0,actualCI:bunker,altTonnes:0,baseTonnes:baseMass,reason:'Bunker fuel already meets the target',details:{...baseDetails,rawMinimumBlend:0,actualCI:bunker,reason:'Bunker fuel already meets the target'}};
  if(alternative>target||denominator<=0||!Number.isFinite(raw))return failed({...baseDetails,actualCI:alternative,reason:'Alternative fuel CI remains above FuelEU target even at 100% use'},Number.NaN,baseMass);
